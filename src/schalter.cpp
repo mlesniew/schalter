@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <PicoUtils.h>
 #include <PicoMQTT.h>
+#include <PicoSyslog.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 
@@ -17,6 +18,8 @@ PicoUtils::ShiftRegister<1> shift_register(
     D0,  // latch pin
     (uint8_t[1]) { 0b00001111, }  // inverted outputs
 );
+
+PicoSyslog::Logger syslog("schalter");
 
 const std::vector<PicoUtils::BinaryOutput *> outputs = {
     new PicoUtils::ShiftRegisterOutput(shift_register, 0),
@@ -97,6 +100,7 @@ void setup() {
         mqtt.username = config["mqtt"]["username"] | "";
         mqtt.password = config["mqtt"]["password"] | "";
         hostname = config["mqtt"]["hostname"] | "schalter";
+        syslog.server = config["syslog"] | "";
     }
 
     setup_wifi();
@@ -114,7 +118,7 @@ void setup() {
                     [idx] { return outputs[idx]->get(); },
                     [idx] (bool value) {
                         const char * state = value ? "ON": "OFF";
-                        Serial.printf("Relay %i is now %s.\n", idx, state);
+                        syslog.printf("Relay %i is now %s.\n", idx, state);
                         mqtt.publish("schalter/" + board_id + "/" + String(idx), state, 0, true);
                     }));
     }

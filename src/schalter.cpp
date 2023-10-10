@@ -27,6 +27,7 @@ const std::vector<PicoUtils::BinaryOutput *> outputs = {
 
 const String board_id(ESP.getChipId(), HEX);
 const char CONFIG_FILE[] PROGMEM = "/config.json";
+String hostname;
 
 std::vector<PicoUtils::Watch<bool>*> watches;
 PicoMQTT::Client mqtt;
@@ -37,7 +38,7 @@ void announce_state() {
 }
 
 void setup_wifi() {
-    WiFi.hostname("schalter");
+    WiFi.hostname(hostname);
     WiFi.setAutoReconnect(true);
 
     Serial.println(F("Press button now to enter SmartConfig."));
@@ -91,7 +92,11 @@ void setup() {
     LittleFS.begin();
     {
         PicoUtils::JsonConfigFile<StaticJsonDocument<1024>> config(LittleFS, FPSTR(CONFIG_FILE));
-        // TODO
+        mqtt.host = config["mqtt"]["server"] | "";
+        mqtt.port = config["mqtt"]["port"] | 1883;
+        mqtt.username = config["mqtt"]["username"] | "";
+        mqtt.password = config["mqtt"]["password"] | "";
+        hostname = config["mqtt"]["hostname"] | "schalter";
     }
 
     setup_wifi();

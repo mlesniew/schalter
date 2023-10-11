@@ -1,10 +1,11 @@
 #include <Arduino.h>
+#include <ArduinoOTA.h>
+#include <LittleFS.h>
+
 #include <PicoUtils.h>
 #include <PicoMQTT.h>
 #include <PicoSyslog.h>
-#include <LittleFS.h>
 #include <ArduinoJson.h>
-
 
 PicoUtils::PinInput button(D1, true);
 PicoUtils::ResetButton reset_button(button);
@@ -125,6 +126,9 @@ void setup() {
 
     mqtt.begin();
     mqtt.connected_callback = announce_state;
+
+    ArduinoOTA.setHostname(hostname.c_str());
+    ArduinoOTA.begin();
 }
 
 PicoUtils::PeriodicRun announce_state_proc(15, announce_state);
@@ -143,6 +147,7 @@ void update_status_led() {
 };
 
 void loop() {
+    ArduinoOTA.handle();
     mqtt.loop();
     update_status_led();
     announce_state_proc.tick();

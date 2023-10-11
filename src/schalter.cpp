@@ -34,6 +34,7 @@ const std::vector<PicoUtils::BinaryOutput *> outputs = {
 const String board_id(ESP.getChipId(), HEX);
 const char CONFIG_FILE[] PROGMEM = "/config.json";
 String hostname;
+String password;
 
 std::vector<PicoUtils::Watch<bool>*> watches;
 PicoMQTT::Client mqtt;
@@ -108,6 +109,10 @@ void setup_wifi() {
     });
 
     server.on(UriRegex("/output/([0-9]+)/(on|off)$"), HTTP_POST, [] {
+        if (password.length() && !server.authenticate("schalter", password.c_str())) {
+            return server.requestAuthentication();
+        }
+
         const auto idx = server.decodedPathArg(0).toInt();
 
         if (idx <= 0 || idx >= (int) outputs.size()) {
@@ -145,7 +150,8 @@ void setup() {
         mqtt.port = config["mqtt"]["port"] | 1883;
         mqtt.username = config["mqtt"]["username"] | "";
         mqtt.password = config["mqtt"]["password"] | "";
-        hostname = config["mqtt"]["hostname"] | "schalter";
+        hostname = config["hostname"] | "schalter";
+        password = config["password"] | "schalter";
         syslog.server = config["syslog"] | "";
     }
 
@@ -175,6 +181,7 @@ void setup() {
     };
 
     ArduinoOTA.setHostname(hostname.c_str());
+    if (password.length()) ArduinoOTA.setPassword(password.c_str());
     ArduinoOTA.begin();
 }
 

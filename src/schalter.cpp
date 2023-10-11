@@ -6,10 +6,10 @@
 #include <ArduinoJson.h>
 
 
-PicoUtils::PinInput<D1, true> button;
+PicoUtils::PinInput button(D1, true);
 PicoUtils::ResetButton reset_button(button);
 
-PicoUtils::PinOutput<D4, true> wifi_led;
+PicoUtils::PinOutput wifi_led(D4, true);
 PicoUtils::Blink led_blinker(wifi_led, 0, 91);
 
 PicoUtils::ShiftRegister<1> shift_register(

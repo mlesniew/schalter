@@ -36,9 +36,13 @@ String hostname;
 std::vector<PicoUtils::Watch<bool>*> watches;
 PicoMQTT::Client mqtt;
 
+void announce_state(unsigned int idx) {
+    mqtt.publish("schalter/" + board_id + "/" + String(idx), outputs[idx]->get() ? "ON" : "OFF", 0, true);
+}
+
 void announce_state() {
-    for (auto * watch: watches)
-        watch->fire();
+    for (unsigned int idx = 0; idx < outputs.size(); ++idx)
+        announce_state(idx);
 }
 
 void setup_wifi() {
@@ -118,20 +122,22 @@ void setup() {
         watches.push_back(new PicoUtils::Watch<bool>(
                     [idx] { return outputs[idx]->get(); },
                     [idx] (bool value) {
-                        const char * state = value ? "ON": "OFF";
-                        syslog.printf("Relay %i is now %s.\n", idx, state);
-                        mqtt.publish("schalter/" + board_id + "/" + String(idx), state, 0, true);
+                        syslog.printf("Relay %i is now %s.\n", idx, value ? "ON": "OFF");
+                        announce_state(idx);
                     }));
     }
 
     mqtt.begin();
-    mqtt.connected_callback = announce_state;
+    mqtt.connected_callback = [] {
+        syslog.printf("MQTT connected: %s:%u\n", mqtt.host.c_str(), mqtt.port);
+        announce_state();
+    };
 
     ArduinoOTA.setHostname(hostname.c_str());
     ArduinoOTA.begin();
 }
 
-PicoUtils::PeriodicRun announce_state_proc(15, announce_state);
+PicoUtils::PeriodicRun announce_state_proc(15, [] { announce_state(); });
 
 void update_status_led() {
     if (WiFi.status() == WL_CONNECTED) {

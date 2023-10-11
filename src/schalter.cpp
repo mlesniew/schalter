@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <LittleFS.h>
+#include <ESP8266WebServer.h>
+#include <uri/UriRegex.h>
 
 #include <PicoUtils.h>
 #include <PicoMQTT.h>
@@ -35,6 +37,8 @@ String hostname;
 
 std::vector<PicoUtils::Watch<bool>*> watches;
 PicoMQTT::Client mqtt;
+
+PicoUtils::RestfulServer<ESP8266WebServer> server(80);
 
 void announce_state(unsigned int idx) {
     mqtt.publish("schalter/" + board_id + "/" + String(idx), outputs[idx]->get() ? "ON" : "OFF", 0, true);
@@ -79,6 +83,43 @@ void setup_wifi() {
         WiFi.softAPdisconnect(true);
         WiFi.begin();
     }
+
+    server.on("/status", HTTP_GET, [] {
+        StaticJsonDocument<1024> json;
+
+        json["board_id"] = board_id;
+        json["mqtt_connected"] = mqtt.connected();
+
+        for (unsigned int idx = 0; idx < outputs.size(); ++idx) {
+            json["relays"][idx] = outputs[idx]->get();
+        }
+
+        server.sendJson(json);
+    });
+
+    server.on(UriRegex("/output/([0-9]+)$"), HTTP_GET, [] {
+        const auto idx = server.decodedPathArg(0).toInt();
+
+        if (idx <= 0 || idx >= (int) outputs.size()) {
+            server.send(404);
+        } else {
+            server.send(200, "text/plain", outputs[idx]->get() ? "on" : "off");
+        }
+    });
+
+    server.on(UriRegex("/output/([0-9]+)/(on|off)$"), HTTP_POST, [] {
+        const auto idx = server.decodedPathArg(0).toInt();
+
+        if (idx <= 0 || idx >= (int) outputs.size()) {
+            server.send(404);
+            return;
+        }
+
+        outputs[idx]->set(server.decodedPathArg(1) == "on");
+        server.send(200);
+    });
+
+    server.begin();
 
     led_blinker.set_pattern(0b10);
 }
@@ -154,6 +195,7 @@ void update_status_led() {
 
 void loop() {
     ArduinoOTA.handle();
+    server.handleClient();
     mqtt.loop();
     update_status_led();
     for (auto watch: watches) watch->tick();

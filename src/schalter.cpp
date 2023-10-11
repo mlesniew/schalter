@@ -156,5 +156,6 @@ void loop() {
     ArduinoOTA.handle();
     mqtt.loop();
     update_status_led();
+    for (auto watch: watches) watch->tick();
     announce_state_proc.tick();
 }

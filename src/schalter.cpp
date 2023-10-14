@@ -19,7 +19,7 @@ PicoUtils::ShiftRegister<1> shift_register(
     D6,  // data pin
     D5,  // clock pin
     D0,  // latch pin
-    (uint8_t[1]) { 0b00001111, }  // inverted outputs
+(uint8_t[1]) { 0b00001111, }  // inverted outputs
 );
 
 PicoSyslog::Logger syslog("schalter");
@@ -46,8 +46,9 @@ void announce_state(unsigned int idx) {
 }
 
 void announce_state() {
-    for (unsigned int idx = 0; idx < outputs.size(); ++idx)
+    for (unsigned int idx = 0; idx < outputs.size(); ++idx) {
         announce_state(idx);
+    }
 }
 
 void setup_wifi() {
@@ -136,10 +137,10 @@ void setup() {
 
     Serial.begin(115200);
     Serial.println(F(
-        "\n"
-        "   Schalter " __DATE__ " " __TIME__ "\n"
-        "\n\n"
-        ));
+                       "\n"
+                       "   Schalter " __DATE__ " " __TIME__ "\n"
+                       "\n\n"
+                   ));
 
     reset_button.init();
 
@@ -167,11 +168,11 @@ void setup() {
         });
 
         watches.push_back(new PicoUtils::Watch<bool>(
-                    [idx] { return outputs[idx]->get(); },
-                    [idx] (bool value) {
-                        syslog.printf("Relay %i is now %s.\n", idx, value ? "ON": "OFF");
-                        announce_state(idx);
-                    }));
+                              [idx] { return outputs[idx]->get(); },
+        [idx](bool value) {
+            syslog.printf("Relay %i is now %s.\n", idx, value ? "ON" : "OFF");
+            announce_state(idx);
+        }));
     }
 
     mqtt.begin();
@@ -181,7 +182,7 @@ void setup() {
     };
 
     ArduinoOTA.setHostname(hostname.c_str());
-    if (password.length()) ArduinoOTA.setPassword(password.c_str());
+    if (password.length()) { ArduinoOTA.setPassword(password.c_str()); }
     ArduinoOTA.begin();
 }
 
@@ -205,6 +206,6 @@ void loop() {
     server.handleClient();
     mqtt.loop();
     update_status_led();
-    for (auto watch: watches) watch->tick();
+    for (auto watch : watches) { watch->tick(); }
     announce_state_proc.tick();
 }

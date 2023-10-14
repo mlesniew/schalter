@@ -101,7 +101,7 @@ void setup_wifi() {
     server.on(UriRegex("/output/([0-9]+)$"), HTTP_GET, [] {
         const auto idx = server.decodedPathArg(0).toInt();
 
-        if (idx <= 0 || idx >= (int) outputs.size()) {
+        if (idx < 0 || idx >= (int) outputs.size()) {
             server.send(404);
         } else {
             server.send(200, "text/plain", outputs[idx]->get() ? "on" : "off");
@@ -115,7 +115,7 @@ void setup_wifi() {
 
         const auto idx = server.decodedPathArg(0).toInt();
 
-        if (idx <= 0 || idx >= (int) outputs.size()) {
+        if (idx < 0 || idx >= (int) outputs.size()) {
             server.send(404);
             return;
         }

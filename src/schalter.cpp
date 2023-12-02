@@ -19,17 +19,12 @@ PicoUtils::ShiftRegister<1> shift_register(
     D6,  // data pin
     D5,  // clock pin
     D0,  // latch pin
-(uint8_t[1]) { 0b00001111, }  // inverted outputs
+(uint8_t[1]) { 0b11111111, }  // inverted outputs
 );
 
 PicoSyslog::Logger syslog("schalter");
 
-const std::vector<PicoUtils::BinaryOutput *> outputs = {
-    new PicoUtils::ShiftRegisterOutput(shift_register, 0),
-    new PicoUtils::ShiftRegisterOutput(shift_register, 1),
-    new PicoUtils::ShiftRegisterOutput(shift_register, 2),
-    new PicoUtils::ShiftRegisterOutput(shift_register, 3),
-};
+std::vector<PicoUtils::BinaryOutput *> outputs;
 
 const String board_id(ESP.getChipId(), HEX);
 const char CONFIG_FILE[] PROGMEM = "/config.json";
@@ -145,8 +140,11 @@ void setup() {
     reset_button.init();
 
     LittleFS.begin();
+
+    unsigned int output_count;
     {
         PicoUtils::JsonConfigFile<StaticJsonDocument<1024>> config(LittleFS, FPSTR(CONFIG_FILE));
+        output_count = config["outputs"] | 8;
         mqtt.host = config["mqtt"]["server"] | "";
         mqtt.port = config["mqtt"]["port"] | 1883;
         mqtt.username = config["mqtt"]["username"] | "";
@@ -158,7 +156,8 @@ void setup() {
 
     setup_wifi();
 
-    for (unsigned int idx = 0; idx < outputs.size(); ++idx) {
+    for (unsigned int idx = 0; idx < output_count; ++idx) {
+        outputs.push_back(new PicoUtils::ShiftRegisterOutput(shift_register, idx));
         mqtt.subscribe("schalter/" + board_id + "/" + String(idx) + "/set", [idx](String payload) {
             if (payload == "ON") {
                 outputs[idx]->set(true);

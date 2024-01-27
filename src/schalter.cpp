@@ -5,7 +5,7 @@
 #include <uri/UriRegex.h>
 
 #include <PicoUtils.h>
-#include <PicoMQTT.h>
+#include <PicoMQ.h>
 #include <PicoSyslog.h>
 #include <ArduinoJson.h>
 
@@ -32,12 +32,12 @@ String hostname;
 String password;
 
 std::vector<PicoUtils::Watch<bool>*> watches;
-PicoMQTT::Client mqtt;
+PicoMQ picomq;
 
 PicoUtils::RestfulServer<ESP8266WebServer> server(80);
 
 void announce_state(unsigned int idx) {
-    mqtt.publish("schalter/" + board_id + "/" + String(idx), outputs[idx]->get() ? "ON" : "OFF", 0, true);
+    picomq.publish("schalter/" + board_id + "/" + String(idx), outputs[idx]->get() ? "ON" : "OFF");
 }
 
 void announce_state() {
@@ -85,7 +85,6 @@ void setup_wifi() {
         StaticJsonDocument<1024> json;
 
         json["board_id"] = board_id;
-        json["mqtt_connected"] = mqtt.connected();
 
         for (unsigned int idx = 0; idx < outputs.size(); ++idx) {
             json["relays"][idx] = outputs[idx]->get();
@@ -145,10 +144,6 @@ void setup() {
     {
         PicoUtils::JsonConfigFile<StaticJsonDocument<1024>> config(LittleFS, FPSTR(CONFIG_FILE));
         output_count = config["outputs"] | 8;
-        mqtt.host = config["mqtt"]["server"] | "";
-        mqtt.port = config["mqtt"]["port"] | 1883;
-        mqtt.username = config["mqtt"]["username"] | "";
-        mqtt.password = config["mqtt"]["password"] | "";
         hostname = config["hostname"] | "schalter";
         password = config["password"] | "schalter";
         syslog.server = config["syslog"] | "";
@@ -158,7 +153,7 @@ void setup() {
 
     for (unsigned int idx = 0; idx < output_count; ++idx) {
         outputs.push_back(new PicoUtils::ShiftRegisterOutput(shift_register, idx));
-        mqtt.subscribe("schalter/" + board_id + "/" + String(idx) + "/set", [idx](String payload) {
+        picomq.subscribe("schalter/" + board_id + "/" + String(idx) + "/set", [idx](String payload) {
             if (payload == "ON") {
                 outputs[idx]->set(true);
             } else if (payload == "OFF") {
@@ -174,11 +169,7 @@ void setup() {
         }));
     }
 
-    mqtt.begin();
-    mqtt.connected_callback = [] {
-        syslog.printf("MQTT connected: %s:%u\n", mqtt.host.c_str(), mqtt.port);
-        announce_state();
-    };
+    picomq.begin();
 
     ArduinoOTA.setHostname(hostname.c_str());
     if (password.length()) { ArduinoOTA.setPassword(password.c_str()); }
@@ -189,11 +180,7 @@ PicoUtils::PeriodicRun announce_state_proc(15, [] { announce_state(); });
 
 void update_status_led() {
     if (WiFi.status() == WL_CONNECTED) {
-        if (mqtt.connected()) {
-            led_blinker.set_pattern(uint64_t(0b101) << 60);
-        } else {
-            led_blinker.set_pattern(uint64_t(0b1) << 60);
-        }
+        led_blinker.set_pattern(uint64_t(0b1) << 60);
     } else {
         led_blinker.set_pattern(0b1100);
     }
@@ -203,7 +190,7 @@ void update_status_led() {
 void loop() {
     ArduinoOTA.handle();
     server.handleClient();
-    mqtt.loop();
+    picomq.loop();
     update_status_led();
     for (auto watch : watches) { watch->tick(); }
     announce_state_proc.tick();

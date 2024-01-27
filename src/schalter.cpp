@@ -31,6 +31,7 @@ const char CONFIG_FILE[] PROGMEM = "/config.json";
 String hostname;
 String password;
 
+PicoUtils::Stopwatch last_command_stopwatch;
 std::vector<PicoUtils::Watch<bool>*> watches;
 PicoMQ picomq;
 
@@ -154,6 +155,7 @@ void setup() {
     for (unsigned int idx = 0; idx < output_count; ++idx) {
         outputs.push_back(new PicoUtils::ShiftRegisterOutput(shift_register, idx));
         picomq.subscribe("schalter/" + board_id + "/" + String(idx) + "/set", [idx](String payload) {
+            last_command_stopwatch.reset();
             if (payload == "ON") {
                 outputs[idx]->set(true);
             } else if (payload == "OFF") {
@@ -180,7 +182,11 @@ PicoUtils::PeriodicRun announce_state_proc(15, [] { announce_state(); });
 
 void update_status_led() {
     if (WiFi.status() == WL_CONNECTED) {
-        led_blinker.set_pattern(uint64_t(0b1) << 60);
+        if (last_command_stopwatch.elapsed() <= 60) {
+            led_blinker.set_pattern(uint64_t(0b101) << 60);
+        } else {
+            led_blinker.set_pattern(uint64_t(0b1) << 60);
+        }
     } else {
         led_blinker.set_pattern(0b1100);
     }

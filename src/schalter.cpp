@@ -85,7 +85,7 @@ void setup_wifi() {
     }
 
     server.on("/status", HTTP_GET, [] {
-        StaticJsonDocument<1024> json;
+        JsonDocument json;
 
         json["board_id"] = board_id;
 
@@ -145,7 +145,7 @@ void setup() {
 
     unsigned int output_count;
     {
-        PicoUtils::JsonConfigFile<StaticJsonDocument<1024>> config(LittleFS, FPSTR(CONFIG_FILE));
+        PicoUtils::JsonConfigFile<JsonDocument> config(LittleFS, FPSTR(CONFIG_FILE));
         output_count = config["outputs"] | 8;
         hostname = config["hostname"] | "schalter";
         password = config["password"] | "schalter";

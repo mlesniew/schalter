@@ -44,6 +44,8 @@ void announce_state(unsigned int idx) {
 }
 
 PicoUtils::PeriodicRun announce_state_proc(15, [] {
+    if (outputs.empty())
+        return;
     static unsigned int idx = 0;
     announce_state(idx);
     idx = (idx + 1) % outputs.size();
@@ -179,7 +181,8 @@ void setup() {
     if (password.length()) { ArduinoOTA.setPassword(password.c_str()); }
     ArduinoOTA.begin();
 
-    announce_state_proc.interval_millis /= outputs.size();
+    if (!outputs.empty())
+        announce_state_proc.interval_millis /= outputs.size();
 }
 
 void update_status_led() {

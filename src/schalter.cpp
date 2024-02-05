@@ -38,14 +38,16 @@ PicoMQ picomq;
 PicoUtils::RestfulServer<ESP8266WebServer> server(80);
 
 void announce_state(unsigned int idx) {
-    picomq.publish("schalter/" + board_id + "/" + String(idx), outputs[idx]->get() ? "ON" : "OFF");
+    const char * state = outputs[idx]->get() ? "ON" : "OFF";
+    Serial.printf("Publishing state of schalter %i: %s\n", idx, state);
+    picomq.publish("schalter/" + board_id + "/" + String(idx), state);
 }
 
-void announce_state() {
-    for (unsigned int idx = 0; idx < outputs.size(); ++idx) {
-        announce_state(idx);
-    }
-}
+PicoUtils::PeriodicRun announce_state_proc(15, [] {
+    static unsigned int idx = 0;
+    announce_state(idx);
+    idx = (idx + 1) % outputs.size();
+});
 
 void setup_wifi() {
     WiFi.hostname(hostname);
@@ -176,9 +178,9 @@ void setup() {
     ArduinoOTA.setHostname(hostname.c_str());
     if (password.length()) { ArduinoOTA.setPassword(password.c_str()); }
     ArduinoOTA.begin();
-}
 
-PicoUtils::PeriodicRun announce_state_proc(15, [] { announce_state(); });
+    announce_state_proc.interval_millis /= outputs.size();
+}
 
 void update_status_led() {
     if (WiFi.status() == WL_CONNECTED) {

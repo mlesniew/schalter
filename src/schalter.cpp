@@ -52,6 +52,8 @@ PicoUtils::PeriodicRun announce_state_proc(15, [] {
 });
 
 void setup_wifi() {
+    PicoUtils::BackgroundBlinker bb(led_blinker);
+
     WiFi.hostname(hostname);
     WiFi.setAutoReconnect(true);
 

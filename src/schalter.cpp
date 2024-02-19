@@ -25,33 +25,50 @@ PicoUtils::ShiftRegister<1> shift_register(
 
 PicoSyslog::Logger syslog("schalter");
 
-std::vector<PicoUtils::BinaryOutput *> outputs;
+PicoMQTT::Client mqtt;
+PicoUtils::Stopwatch last_command_stopwatch;
 
 const String board_id(ESP.getChipId(), HEX);
 const char CONFIG_FILE[] PROGMEM = "/config.json";
 String hostname;
 String password;
 
-std::vector<PicoUtils::Watch<bool>*> watches;
-PicoMQTT::Client mqtt;
-
 PicoUtils::RestfulServer<ESP8266WebServer> server(80);
 
-void announce_state(unsigned int idx) {
-    const char * state = outputs[idx]->get() ? "ON" : "OFF";
-    Serial.printf("Publishing state of schalter %i: %s\n", idx, state);
-    mqtt.publish("schalter/" + board_id + "/" + String(idx), state);
-}
+class SchalterOutput: public PicoUtils::ShiftRegisterOutput {
+    public:
+        SchalterOutput(PicoUtils::ShiftRegisterInterface & shift_register, unsigned int idx)
+            : PicoUtils::ShiftRegisterOutput(shift_register, idx), announced_state(false) {
 
-PicoUtils::PeriodicRun announce_state_proc(30, [] {
-    if (outputs.empty())
-        return;
-    static unsigned int idx = 0;
-    announce_state(idx);
-    idx = (idx + 1) % outputs.size();
-});
+            mqtt.subscribe("schalter/" + board_id + "/" + String(idx) + "/set", [this](String payload) {
+                set(payload == "ON");
+                last_command_stopwatch.reset();
+            });
+        }
 
-PicoUtils::Stopwatch last_command_stopwatch;
+        void announce_state() {
+            mqtt.publish("schalter/" + board_id + "/" + String(output_idx), get() ? "ON" : "OFF");
+            announcement_stopwatch.reset();
+            announced_state = get();
+        }
+
+        void tick() {
+            if (announced_state != get()) {
+                syslog.printf("Relay %i is now %s.\n", output_idx, get() ? "ON" : "OFF");
+                announce_state();
+            } else if (announcement_stopwatch.elapsed_millis() >= 30 * 1000) {
+                announce_state();
+            }
+        }
+
+    protected:
+        PicoUtils::BinaryOutput * output;
+
+        PicoUtils::Stopwatch announcement_stopwatch;
+        bool announced_state;
+};
+
+std::vector<SchalterOutput *> outputs;
 
 void setup_wifi() {
     PicoUtils::BackgroundBlinker bb(led_blinker);
@@ -170,29 +187,18 @@ void setup() {
     setup_wifi();
 
     for (unsigned int idx = 0; idx < output_count; ++idx) {
-        outputs.push_back(new PicoUtils::ShiftRegisterOutput(shift_register, idx));
-        mqtt.subscribe("schalter/" + board_id + "/" + String(idx) + "/set", [idx](String payload) {
-            outputs[idx]->set(payload == "ON");
-            last_command_stopwatch.reset();
-        });
-
-        watches.push_back(new PicoUtils::Watch<bool>(
-                              [idx] { return outputs[idx]->get(); },
-        [idx](bool value) {
-            syslog.printf("Relay %i is now %s.\n", idx, value ? "ON" : "OFF");
-            announce_state(idx);
-        }));
+        outputs.push_back(new SchalterOutput(shift_register, idx));
     }
 
+    mqtt.connected_callback = [] {
+        syslog.println("MQTT connected, sending state updates...");
+        for (auto output : outputs) { output->announce_state(); }
+    };
     mqtt.begin();
 
     ArduinoOTA.setHostname(hostname.c_str());
     if (password.length()) { ArduinoOTA.setPassword(password.c_str()); }
     ArduinoOTA.begin();
-
-    if (!outputs.empty()) {
-        announce_state_proc.interval_millis /= outputs.size();
-    }
 }
 
 void update_status_led() {
@@ -218,8 +224,7 @@ void loop() {
     ArduinoOTA.handle();
     server.handleClient();
     mqtt.loop();
-    for (auto watch : watches) { watch->tick(); }
-    announce_state_proc.tick();
+    for (auto output : outputs) { output->tick(); }
     update_status_led();
     restart_on_connectivity_loss();
 }

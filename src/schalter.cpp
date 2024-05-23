@@ -14,7 +14,7 @@ PicoUtils::PinInput button(D1, true);
 PicoUtils::ResetButton reset_button(button);
 
 PicoUtils::PinOutput wifi_led(D4, true);
-PicoUtils::Blink led_blinker(wifi_led, 0, 91);
+PicoUtils::WiFiControlSmartConfig wifi_control(wifi_led);
 
 PicoUtils::ShiftRegister<1> shift_register(
     D6,  // data pin
@@ -37,77 +37,93 @@ PicoUtils::RestfulServer<ESP8266WebServer> server(80);
 
 class SchalterOutput: public PicoUtils::ShiftRegisterOutput {
     public:
-        SchalterOutput(PicoUtils::ShiftRegisterInterface & shift_register, unsigned int idx)
-            : PicoUtils::ShiftRegisterOutput(shift_register, idx), announced_state(false) {
+        SchalterOutput(PicoUtils::ShiftRegisterInterface & shift_register, unsigned int idx, const String & name)
+            : PicoUtils::ShiftRegisterOutput(shift_register, idx), name(name), announced_state(false) {
 
-            mqtt.subscribe("schalter/" + board_id + "/" + String(idx) + "/set", [this](String payload) {
+            auto handler = [this](String payload) {
                 set(payload == "ON");
                 last_command_stopwatch.reset();
-            });
+            };
+
+            mqtt.subscribe("schalter/" + board_id + "/" + String(idx) + "/set", handler);
+            mqtt.subscribe("schalter/" + name + "/set", handler);
         }
 
         void announce_state() {
-            mqtt.publish("schalter/" + board_id + "/" + String(output_idx), get() ? "ON" : "OFF");
+            const char * state = get() ? "ON" : "OFF";
+            mqtt.publish("schalter/" + board_id + "/" + String(output_idx), state);
+            mqtt.publish("schalter/" + name, state);
             announcement_stopwatch.reset();
             announced_state = get();
         }
 
         void tick() {
             if (announced_state != get()) {
-                syslog.printf("Relay %i is now %s.\n", output_idx, get() ? "ON" : "OFF");
+                syslog.printf("Relay #%i '%s' is now %s.\n", output_idx, name.c_str(), get() ? "ON" : "OFF");
                 announce_state();
             } else if (announcement_stopwatch.elapsed_millis() >= 30 * 1000) {
                 announce_state();
             }
         }
 
-    protected:
-        PicoUtils::BinaryOutput * output;
+        const String name;
 
+    protected:
         PicoUtils::Stopwatch announcement_stopwatch;
         bool announced_state;
 };
 
 std::vector<SchalterOutput *> outputs;
 
-void setup_wifi() {
-    PicoUtils::BackgroundBlinker bb(led_blinker);
+void setup() {
+    wifi_led.init();
+    wifi_led.set(true);
+
+    shift_register.init();
+
+    Serial.begin(115200);
+    Serial.println(F(
+                       "\n"
+                       "   Schalter " __DATE__ " " __TIME__ "\n"
+                       "\n\n"
+                   ));
+
+    reset_button.init();
+
+    LittleFS.begin();
+
+    {
+        PicoUtils::JsonConfigFile<JsonDocument> config(LittleFS, FPSTR(CONFIG_FILE));
+        hostname = config["hostname"] | "schalter";
+        password = config["password"] | "";
+        syslog.server = config["syslog"] | "";
+
+        mqtt.host = config["mqtt"]["server"] | "calor.local";
+        mqtt.port = config["mqtt"]["port"] | 1883;
+        mqtt.username = config["mqtt"]["username"] | "";
+        mqtt.password = config["mqtt"]["password"] | "";
+
+        for (JsonVariant value : config["outputs"].as<JsonArray>()) {
+            const unsigned int idx = outputs.size();
+            const String name = value | String(idx);
+            outputs.push_back(new SchalterOutput(shift_register, idx, name));
+        }
+    }
 
     WiFi.hostname(hostname);
-    WiFi.setAutoReconnect(true);
     WiFi.setSleepMode(WIFI_NONE_SLEEP);
     experimental::ESP8266WiFiGratuitous::stationKeepAliveSetIntervalMs(1000);
+    wifi_control.init(button);
 
-    Serial.println(F("Press button now to enter SmartConfig."));
-    led_blinker.set_pattern(1);
-    const PicoUtils::Stopwatch stopwatch;
-    bool smart_config = false;
-    {
-        while (!smart_config && (stopwatch.elapsed_millis() < 5 * 1000)) {
-            smart_config = button;
-            delay(100);
-        }
-    }
+    wifi_control.get_connectivity_level = [] {
+        return (last_command_stopwatch.elapsed_millis() <= 2 * 60 * 1000) ? 2 : 1;
+    };
 
-    if (smart_config) {
-        led_blinker.set_pattern(0b100100100 << 9);
-
-        Serial.println(F("Entering SmartConfig mode."));
-        WiFi.beginSmartConfig();
-        while (!WiFi.smartConfigDone() && (stopwatch.elapsed_millis() < 5 * 60 * 1000)) {
-            delay(100);
-        }
-
-        if (WiFi.smartConfigDone()) {
-            Serial.println(F("SmartConfig success."));
-        } else {
-            Serial.println(F("SmartConfig failed.  Reboot."));
-            ESP.reset();
-        }
-    } else {
-        WiFi.softAPdisconnect(true);
-        WiFi.begin();
-    }
+    mqtt.connected_callback = [] {
+        syslog.println("MQTT connected, sending state updates...");
+        for (auto output : outputs) { output->announce_state(); }
+    };
+    mqtt.begin();
 
     server.on("/status", HTTP_GET, [] {
         JsonDocument json;
@@ -115,7 +131,9 @@ void setup_wifi() {
         json["board_id"] = board_id;
 
         for (unsigned int idx = 0; idx < outputs.size(); ++idx) {
-            json["relays"][idx] = outputs[idx]->get();
+            SchalterOutput * output = outputs[idx];
+            json["relays"][idx] = output->get();
+            json["names"][idx] = output->name;
         }
 
         server.sendJson(json);
@@ -149,70 +167,10 @@ void setup_wifi() {
 
     server.begin();
 
-    led_blinker.set_pattern(0b10);
-}
-
-void setup() {
-    shift_register.init();
-    wifi_led.init();
-    wifi_led.set(true);
-
-    Serial.begin(115200);
-    Serial.println(F(
-                       "\n"
-                       "   Schalter " __DATE__ " " __TIME__ "\n"
-                       "\n\n"
-                   ));
-
-    delay(3000);
-
-    reset_button.init();
-
-    LittleFS.begin();
-
-    unsigned int output_count;
-    {
-        PicoUtils::JsonConfigFile<JsonDocument> config(LittleFS, FPSTR(CONFIG_FILE));
-        output_count = config["outputs"] | 8;
-        hostname = config["hostname"] | "schalter";
-        password = config["password"] | "schalter";
-        syslog.server = config["syslog"] | "";
-
-        mqtt.host = config["mqtt"]["server"] | "calor.local";
-        mqtt.port = config["mqtt"]["port"] | 1883;
-        mqtt.username = config["mqtt"]["username"] | "";
-        mqtt.password = config["mqtt"]["password"] | "";
-    }
-
-    setup_wifi();
-
-    for (unsigned int idx = 0; idx < output_count; ++idx) {
-        outputs.push_back(new SchalterOutput(shift_register, idx));
-    }
-
-    mqtt.connected_callback = [] {
-        syslog.println("MQTT connected, sending state updates...");
-        for (auto output : outputs) { output->announce_state(); }
-    };
-    mqtt.begin();
-
     ArduinoOTA.setHostname(hostname.c_str());
     if (password.length()) { ArduinoOTA.setPassword(password.c_str()); }
     ArduinoOTA.begin();
 }
-
-void update_status_led() {
-    if (WiFi.status() == WL_CONNECTED) {
-        if (last_command_stopwatch.elapsed_millis() <= 2 * 60 * 1000) {
-            led_blinker.set_pattern(uint64_t(0b101) << 60);
-        } else {
-            led_blinker.set_pattern(uint64_t(0b1) << 60);
-        }
-    } else {
-        led_blinker.set_pattern(0b1100);
-    }
-    led_blinker.tick();
-};
 
 void restart_on_connectivity_loss() {
     if (last_command_stopwatch.elapsed_millis() >= 5 * 60 * 1000) {
@@ -225,6 +183,6 @@ void loop() {
     server.handleClient();
     mqtt.loop();
     for (auto output : outputs) { output->tick(); }
-    update_status_led();
+    wifi_control.tick();
     restart_on_connectivity_loss();
 }

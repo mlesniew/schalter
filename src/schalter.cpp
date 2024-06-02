@@ -45,16 +45,14 @@ class SchalterOutput: public PicoUtils::ShiftRegisterOutput {
                 last_command_stopwatch.reset();
             };
 
-            mqtt.subscribe("schalter/" + board_id + "/" + String(idx) + "/set", handler);
             mqtt.subscribe("schalter/" + name + "/set", handler);
         }
 
         void announce_state() {
-            const char * state = get() ? "ON" : "OFF";
-            mqtt.publish("schalter/" + board_id + "/" + String(output_idx), state);
+            announced_state = get();
+            const char * state = announced_state ? "ON" : "OFF";
             mqtt.publish("schalter/" + name, state);
             announcement_stopwatch.reset();
-            announced_state = get();
         }
 
         void tick() {

@@ -35,10 +35,34 @@ String password;
 
 PicoUtils::RestfulServer<ESP8266WebServer> server(80);
 
+
 class SchalterOutput: public PicoUtils::ShiftRegisterOutput {
     public:
-        SchalterOutput(PicoUtils::ShiftRegisterInterface & shift_register, unsigned int idx, const String & name)
-            : PicoUtils::ShiftRegisterOutput(shift_register, idx), name(name), announced_state(false) {
+        enum class State {
+            deactivating = 0b00,
+            inactive = 0b01,
+            activating = 0b10,
+            active = 0b11,
+        };
+
+        static const char * to_cstr(const State & state) {
+            switch (state) {
+                case State::activating:
+                    return "TON";
+                case State::deactivating:
+                    return "TOFF";
+                case State::active:
+                    return "ON";
+                case State::inactive:
+                default:
+                    return "OFF";
+            }
+        }
+
+        SchalterOutput(PicoUtils::ShiftRegisterInterface & shift_register, unsigned int idx, const String & name,
+                       unsigned long delay_ms)
+            : PicoUtils::ShiftRegisterOutput(shift_register, idx), name(name), delay_ms(delay_ms),
+              announced_state(State::inactive) {
 
             auto handler = [this](String payload) {
                 set(payload == "ON");
@@ -48,16 +72,30 @@ class SchalterOutput: public PicoUtils::ShiftRegisterOutput {
             mqtt.subscribe("schalter/" + name + "/set", handler);
         }
 
+        virtual void set(const bool new_value) override {
+            if (new_value != get()) {
+                activation_stopwatch.reset();
+            }
+            PicoUtils::ShiftRegisterOutput::set(new_value);
+        }
+
+        State get_state() const {
+            const unsigned int v =
+                (get() ? 0b10 : 0b00) |
+                (activation_stopwatch.elapsed_millis() >= delay_ms ? 0b01 : 0b00);
+            return static_cast<State>(v);
+        }
+
         void announce_state() {
-            announced_state = get();
-            const char * state = announced_state ? "ON" : "OFF";
-            mqtt.publish("schalter/" + name, state);
+            announced_state = get_state();
+            mqtt.publish("schalter/" + name, to_cstr(announced_state));
             announcement_stopwatch.reset();
         }
 
         void tick() {
-            if (announced_state != get()) {
-                syslog.printf("Relay #%i '%s' is now %s.\n", output_idx, name.c_str(), get() ? "ON" : "OFF");
+            const auto state = get_state();
+            if (announced_state != state) {
+                syslog.printf("Relay #%i '%s' is now %s.\n", output_idx, name.c_str(), to_cstr(state));
                 announce_state();
             } else if (announcement_stopwatch.elapsed_millis() >= 30 * 1000) {
                 announce_state();
@@ -65,10 +103,12 @@ class SchalterOutput: public PicoUtils::ShiftRegisterOutput {
         }
 
         const String name;
+        const unsigned long delay_ms;
 
     protected:
         PicoUtils::Stopwatch announcement_stopwatch;
-        bool announced_state;
+        PicoUtils::Stopwatch activation_stopwatch;
+        State announced_state;
 };
 
 std::vector<SchalterOutput *> outputs;
@@ -103,8 +143,9 @@ void setup() {
 
         for (JsonVariant value : config["outputs"].as<JsonArray>()) {
             const unsigned int idx = outputs.size();
-            const String name = value | String(idx);
-            outputs.push_back(new SchalterOutput(shift_register, idx, name));
+            const String name = value["name"] | (board_id + "-" + String(idx));
+            const unsigned long delay_ms = (value["delay"] | 0.0) * 1000;
+            outputs.push_back(new SchalterOutput(shift_register, idx, name, delay_ms));
         }
     }
 
@@ -132,6 +173,7 @@ void setup() {
             SchalterOutput * output = outputs[idx];
             json["relays"][idx] = output->get();
             json["names"][idx] = output->name;
+            json["states"][idx] = SchalterOutput::to_cstr(output->get_state());
         }
 
         server.sendJson(json);

@@ -59,18 +59,12 @@ class SchalterOutput: public PicoUtils::ShiftRegisterOutput {
             }
         }
 
-        SchalterOutput(PicoUtils::ShiftRegisterInterface & shift_register, unsigned int idx, const String & name,
-                       unsigned long delay_ms)
-            : PicoUtils::ShiftRegisterOutput(shift_register, idx), name(name), delay_ms(delay_ms),
-              announced_state(State::inactive) {
-
-            auto handler = [this](String payload) {
-                set(payload == "ON");
-                last_command_stopwatch.reset();
-            };
-
-            mqtt.subscribe("schalter/" + name + "/set", handler);
+        SchalterOutput(PicoUtils::ShiftRegisterInterface & shift_register, unsigned int idx, const String & name)
+            : PicoUtils::ShiftRegisterOutput(shift_register, idx), name(name), last_state(State::inactive) {
+            set(false);
         }
+
+        virtual bool is_special() const { return true; }
 
         virtual void set(const bool new_value) override {
             if (new_value != get()) {
@@ -79,39 +73,82 @@ class SchalterOutput: public PicoUtils::ShiftRegisterOutput {
             PicoUtils::ShiftRegisterOutput::set(new_value);
         }
 
-        State get_state() const {
+        virtual State get_state() const {
+            return get() ? State::active : State::inactive;
+        }
+
+        virtual void tick() {
+            const auto state = get_state();
+            if (last_state != state) {
+                syslog.printf("Relay #%i '%s' is now %s.\n", output_idx, name.c_str(), to_cstr(state));
+                announce_state(state);
+                last_state = state;
+            } else if (announcement_stopwatch.elapsed_millis() >= 30 * 1000) {
+                announce_state(state);
+            }
+        }
+
+        void announce_state() {
+            announce_state(get_state());
+        }
+
+        const String name;
+
+    protected:
+        void announce_state(const State state) {
+            mqtt.publish("schalter/" + name, to_cstr(state));
+            announcement_stopwatch.reset();
+        }
+
+        State last_state;
+        PicoUtils::Stopwatch activation_stopwatch;
+        PicoUtils::Stopwatch announcement_stopwatch;
+};
+
+std::vector<SchalterOutput *> outputs;
+
+class SchalterOutputSimple: public SchalterOutput {
+    public:
+        SchalterOutputSimple(PicoUtils::ShiftRegisterInterface & shift_register, unsigned int idx, const String & name,
+                             unsigned long delay_ms)
+            : SchalterOutput(shift_register, idx, name), delay_ms(delay_ms) {
+
+            mqtt.subscribe("schalter/" + name + "/set", [this](String payload) {
+                set(payload == "ON");
+                last_command_stopwatch.reset();
+            });
+
+        }
+
+        virtual bool is_special() const { return false; }
+
+        virtual State get_state() const {
             const unsigned int v =
                 (get() ? 0b10 : 0b00) |
                 (activation_stopwatch.elapsed_millis() >= delay_ms ? 0b01 : 0b00);
             return static_cast<State>(v);
         }
 
-        void announce_state() {
-            announced_state = get_state();
-            mqtt.publish("schalter/" + name, to_cstr(announced_state));
-            announcement_stopwatch.reset();
-        }
-
-        void tick() {
-            const auto state = get_state();
-            if (announced_state != state) {
-                syslog.printf("Relay #%i '%s' is now %s.\n", output_idx, name.c_str(), to_cstr(state));
-                announce_state();
-            } else if (announcement_stopwatch.elapsed_millis() >= 30 * 1000) {
-                announce_state();
-            }
-        }
-
-        const String name;
         const unsigned long delay_ms;
-
-    protected:
-        PicoUtils::Stopwatch announcement_stopwatch;
-        PicoUtils::Stopwatch activation_stopwatch;
-        State announced_state;
 };
 
-std::vector<SchalterOutput *> outputs;
+class SchalterOutputAutoOn: public SchalterOutput {
+    public:
+        SchalterOutputAutoOn(PicoUtils::ShiftRegisterInterface & shift_register, unsigned int idx, const String & name)
+            : SchalterOutput(shift_register, idx, name) {
+        }
+
+        virtual void tick() override {
+            bool any_active = false;
+            for (auto output : outputs) {
+                if (output->is_special()) {
+                    continue;
+                }
+                any_active |= (output->get_state() == State::active);
+            }
+            set(any_active);
+        }
+};
 
 void setup() {
     wifi_led.init();
@@ -144,8 +181,15 @@ void setup() {
         for (JsonVariant value : config["outputs"].as<JsonArray>()) {
             const unsigned int idx = outputs.size();
             const String name = value["name"] | (board_id + "-" + String(idx));
-            const unsigned long delay_ms = (value["delay"] | 0.0) * 1000;
-            outputs.push_back(new SchalterOutput(shift_register, idx, name, delay_ms));
+            const String type = value["type"] | "simple";
+            if (type == "simple") {
+                const unsigned long delay_ms = (value["delay"] | 0.0) * 1000;
+                outputs.push_back(new SchalterOutputSimple(shift_register, idx, name, delay_ms));
+            } else if (type == "auto_on") {
+                outputs.push_back(new SchalterOutputAutoOn(shift_register, idx, name));
+            } else {
+                outputs.push_back(new SchalterOutput(shift_register, idx, name));
+            }
         }
     }
 
@@ -187,22 +231,6 @@ void setup() {
         } else {
             server.send(200, "text/plain", outputs[idx]->get() ? "on" : "off");
         }
-    });
-
-    server.on(UriRegex("/output/([0-9]+)/(on|off)$"), HTTP_POST, [] {
-        if (password.length() && !server.authenticate("schalter", password.c_str())) {
-            return server.requestAuthentication();
-        }
-
-        const auto idx = server.decodedPathArg(0).toInt();
-
-        if (idx < 0 || idx >= (int) outputs.size()) {
-            server.send(404);
-            return;
-        }
-
-        outputs[idx]->set(server.decodedPathArg(1) == "on");
-        server.send(200);
     });
 
     server.begin();

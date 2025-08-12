@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Schalter</title>
+  <link href="milligram.min.css" rel="stylesheet" />
+  <style>
+    .column {
+    }
+    .card {
+      margin: 1rem;
+      border: 0.1rem solid #ccc;
+      border-radius: 1rem;
+      padding: 1rem;
+      background: #fff;
+      box-shadow: 0 1rem 2rem rgba(0,0,0,0.05);
+      text-align: center;
+    }
+    .card p {
+  margin: 0;
+  text-align: center;
+  font-size: 1.1em;
+}
+.card strong {
+  display: block;
+  font-size: 0.9em;
+  margin-bottom: 0.3em;
+  color: #555;
+}
+  </style>
+</head>
+<body>
+  <main class="container">
+
+    <section>
+      <div class="clearfix">
+        <div class="float-left">
+          <h1><span id="hostname"></span></h1>
+        </div>
+        <div class="float-right">
+          <p>Board <span id="board_id"></span></p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <table>
+        <thead>
+          <tr><th>Output</th><th>Name</th><th>Power</th><th>State</th></tr>
+        </thead>
+        <tbody id="relays_table">
+          <!-- relay rows go here -->
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <div class="row">
+        <div class="column card">
+          <p><strong>MQTT </strong> <span id="mqtt_connected"></span><span id="mqtt_server"></span></p>
+        </div>
+        <div class="column card">
+          <p><strong>Memory </strong> <span id="free_heap_kb"></span> kB</p>
+        </div>
+        <div class="column card">
+          <p><strong>Uptime </strong> <span id="uptime_seconds"></span> s</p>
+        </div>
+        <div class="column card">
+          <p><strong>RSSI</strong> <span id="wifi_rssi_dbm"></span> dBm</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/status');
+        if (!res.ok) throw new Error('Network response was not ok');
+        const data = await res.json();
+
+        document.title = data.hostname;
+
+        document.getElementById('board_id').textContent = data.board_id;
+        document.getElementById('hostname').textContent = data.hostname;
+        document.getElementById('mqtt_connected').textContent = data.mqtt_connected ? '✔' : '✗';
+        document.getElementById('mqtt_server').textContent = data.mqtt_server;
+        document.getElementById('free_heap_kb').textContent = (data.free_heap_bytes / 1024).toFixed(1);
+        document.getElementById('uptime_seconds').textContent = data.uptime_seconds;
+        document.getElementById('wifi_rssi_dbm').textContent = data.wifi_rssi_dbm;
+
+        const tbody = document.getElementById('relays_table');
+        tbody.innerHTML = ''; // clear old rows
+
+        data.relays.forEach((r, index) => {
+          const tr = document.createElement('tr');
+
+          const numTd = document.createElement('td');
+          numTd.textContent = index; // zero-based numbering
+          tr.appendChild(numTd);
+
+          const nameTd = document.createElement('td');
+          nameTd.textContent = r.name;
+          tr.appendChild(nameTd);
+
+          const activatedTd = document.createElement('td');
+          activatedTd.textContent = r.activated ? 'ON' : 'OFF';
+          tr.appendChild(activatedTd);
+
+          const stateTd = document.createElement('td');
+          stateTd.textContent = r.state;
+          tr.appendChild(stateTd);
+
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        console.error('Failed to fetch status:', e);
+      }
+    }
+
+    // Refresh every 5 seconds
+    setInterval(fetchStatus, 5000);
+    fetchStatus();
+  </script>
+</body>
+</html>

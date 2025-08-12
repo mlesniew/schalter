@@ -212,12 +212,21 @@ void setup() {
         JsonDocument json;
 
         json["board_id"] = board_id;
+        json["hostname"] = hostname;
+        json["mqtt_connected"] = mqtt.connected();
+        json["mqtt_server"] = mqtt.host;
+        json["uptime_seconds"] = millis() / 1000;
+        json["free_heap_bytes"] = ESP.getFreeHeap();
+        json["wifi_rssi_dbm"] = WiFi.RSSI();
+
+        auto relays = json["relays"];
 
         for (unsigned int idx = 0; idx < outputs.size(); ++idx) {
             SchalterOutput * output = outputs[idx];
-            json["relays"][idx] = output->get();
-            json["names"][idx] = output->name;
-            json["states"][idx] = SchalterOutput::to_cstr(output->get_state());
+            auto json_element = relays[idx];
+            json_element["name"] = output->name;
+            json_element["state"] = SchalterOutput::to_cstr(output->get_state());
+            json_element["activated"] = output->get();
         }
 
         server.sendJson(json);
@@ -232,6 +241,8 @@ void setup() {
             server.send(200, "text/plain", outputs[idx]->get() ? "on" : "off");
         }
     });
+
+    server.serveStatic("/", LittleFS, "/html/", "max-age=86400");
 
     server.begin();
 
